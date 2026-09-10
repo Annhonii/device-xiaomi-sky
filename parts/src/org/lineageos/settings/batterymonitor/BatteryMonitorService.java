@@ -37,6 +37,7 @@ import androidx.preference.PreferenceManager;
 import org.lineageos.settings.R;
 
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class BatteryMonitorService extends Service {
@@ -47,6 +48,8 @@ public class BatteryMonitorService extends Service {
 
     private static final String PREF_TOTAL_SCREEN_ON = "bm_total_screen_on_ms";
     private static final String PREF_TOTAL_SCREEN_OFF = "bm_total_screen_off_ms";
+    private static final String PREF_SCREEN_ON_DRAIN = "bm_screen_on_drain_pct";
+    private static final String PREF_SCREEN_OFF_DRAIN = "bm_screen_off_drain_pct";
 
     private static volatile BatteryMonitorService sInstance;
 
@@ -55,6 +58,9 @@ public class BatteryMonitorService extends Service {
 
     private final AtomicLong mTotalScreenOnMs = new AtomicLong();
     private final AtomicLong mTotalScreenOffMs = new AtomicLong();
+    private final AtomicInteger mScreenOnDrainPct = new AtomicInteger();
+    private final AtomicInteger mScreenOffDrainPct = new AtomicInteger();
+    private volatile int mLastSampledLevel = -1;
     private volatile long mScreenStateChangedAtMs;
     private volatile boolean mScreenWasOn;
     private volatile long mServiceStartElapsedMs;
@@ -122,6 +128,9 @@ public class BatteryMonitorService extends Service {
     public synchronized void resetTracking() {
         mTotalScreenOnMs.set(0);
         mTotalScreenOffMs.set(0);
+        mScreenOnDrainPct.set(0);
+        mScreenOffDrainPct.set(0);
+        mLastSampledLevel = -1;
         long now = SystemClock.elapsedRealtime();
         mScreenStateChangedAtMs = now;
         mServiceStartElapsedMs = now;
@@ -129,6 +138,8 @@ public class BatteryMonitorService extends Service {
                 .edit()
                 .remove(PREF_TOTAL_SCREEN_ON)
                 .remove(PREF_TOTAL_SCREEN_OFF)
+                .remove(PREF_SCREEN_ON_DRAIN)
+                .remove(PREF_SCREEN_OFF_DRAIN)
                 .apply();
     }
 
@@ -148,6 +159,8 @@ public class BatteryMonitorService extends Service {
                 PreferenceManager.getDefaultSharedPreferences(this);
         mTotalScreenOnMs.set(prefs.getLong(PREF_TOTAL_SCREEN_ON, 0L));
         mTotalScreenOffMs.set(prefs.getLong(PREF_TOTAL_SCREEN_OFF, 0L));
+        mScreenOnDrainPct.set(prefs.getInt(PREF_SCREEN_ON_DRAIN, 0));
+        mScreenOffDrainPct.set(prefs.getInt(PREF_SCREEN_OFF_DRAIN, 0));
 
         PowerManager pm = getSystemService(PowerManager.class);
         mScreenWasOn = pm != null && pm.isInteractive();
@@ -254,7 +267,27 @@ public class BatteryMonitorService extends Service {
                 .edit()
                 .putLong(PREF_TOTAL_SCREEN_ON, getScreenOnMs())
                 .putLong(PREF_TOTAL_SCREEN_OFF, getScreenOffMs())
+                .putInt(PREF_SCREEN_ON_DRAIN, mScreenOnDrainPct.get())
+                .putInt(PREF_SCREEN_OFF_DRAIN, mScreenOffDrainPct.get())
                 .apply();
+    }
+
+    /**
+     * Har poll par battery level check karta hai, aur agar level girta hai
+     * (charging ke time increase ko ignore karte hue), us drop ko current
+     * screen state (on/off) ke account me jod deta hai.
+     */
+    private void sampleDrain(int currentLevel) {
+        int last = mLastSampledLevel;
+        if (last >= 0 && currentLevel < last) {
+            int delta = last - currentLevel;
+            if (mScreenWasOn) {
+                mScreenOnDrainPct.addAndGet(delta);
+            } else {
+                mScreenOffDrainPct.addAndGet(delta);
+            }
+        }
+        mLastSampledLevel = currentLevel;
     }
 
     private Notification buildBasicNotification() {
@@ -275,6 +308,7 @@ public class BatteryMonitorService extends Service {
     private Notification buildNotification() {
         BatteryMonitorUtils.BatteryStats stats =
                 BatteryMonitorUtils.collect(this);
+        sampleDrain(stats.level);
         DrainTracker.recordSample(this, stats.level, stats.isScreenOn,
                 stats.isCharging, stats.currentMa);
 
@@ -304,7 +338,8 @@ public class BatteryMonitorService extends Service {
         String compact = buildCompactText(stats, showCurrent, showDrain);
         String expanded = buildExpandedText(stats, showCurrent, showDrain, showTemp,
                 showVoltage, showHealth, showScreen, showRam, showUptime,
-                activeDrain, idleDrain);
+                activeDrain, idleDrain,
+                mScreenOnDrainPct.get(), mScreenOffDrainPct.get());
 
         Intent settings = new Intent(this, BatteryMonitorActivity.class);
         PendingIntent pi = PendingIntent.getActivity(this, 0, settings,
@@ -366,7 +401,8 @@ public class BatteryMonitorService extends Service {
             boolean showCurrent, boolean showDrain, boolean showTemp,
             boolean showVoltage, boolean showHealth,
             boolean showScreen, boolean showRam, boolean showUptime,
-            float activeDrain, float idleDrain) {
+            float activeDrain, float idleDrain,
+            int screenOnDrainPct, int screenOffDrainPct) {
         StringBuilder sb = new StringBuilder();
 
         if (showCurrent) {
@@ -419,15 +455,9 @@ public class BatteryMonitorService extends Service {
         if (showScreen) {
             sb.append("Screen On: ")
                     .append(BatteryMonitorUtils.formatDuration(stats.screenOnMs))
-                    .append(" (").append(String.format(Locale.US, "%.1f",
-                            BatteryMonitorUtils.calculatePercentage(
-                                    stats.screenOnMs, stats.elapsedBaseMs)))
-                    .append("%)   Off: ")
+                    .append(" (").append(screenOnDrainPct).append("%)   Off: ")
                     .append(BatteryMonitorUtils.formatDuration(stats.screenOffMs))
-                    .append(" (").append(String.format(Locale.US, "%.1f",
-                            BatteryMonitorUtils.calculatePercentage(
-                                    stats.screenOffMs, stats.elapsedBaseMs)))
-                    .append("%)\n");
+                    .append(" (").append(screenOffDrainPct).append("%)\n");
             sb.append("Deep Sleep: ")
                     .append(BatteryMonitorUtils.formatDuration(stats.deepSleepMs))
                     .append(" (").append(String.format(Locale.US, "%.1f",
