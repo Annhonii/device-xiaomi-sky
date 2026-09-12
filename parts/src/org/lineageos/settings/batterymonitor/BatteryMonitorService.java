@@ -50,6 +50,8 @@ public class BatteryMonitorService extends Service {
     private static final String PREF_TOTAL_SCREEN_OFF = "bm_total_screen_off_ms";
     private static final String PREF_SCREEN_ON_DRAIN = "bm_screen_on_drain_pct";
     private static final String PREF_SCREEN_OFF_DRAIN = "bm_screen_off_drain_pct";
+    private static final String PREF_BASELINE_UPTIME_MS = "bm_baseline_uptime_ms";
+    private static final String PREF_BASELINE_ELAPSED_MS = "bm_baseline_elapsed_ms";
 
     private static volatile BatteryMonitorService sInstance;
 
@@ -64,6 +66,8 @@ public class BatteryMonitorService extends Service {
     private volatile long mScreenStateChangedAtMs;
     private volatile boolean mScreenWasOn;
     private volatile long mServiceStartElapsedMs;
+    private volatile long mBaselineUptimeMs;
+    private volatile long mBaselineElapsedMs;
 
     private final BroadcastReceiver mScreenReceiver = new BroadcastReceiver() {
         @Override
@@ -112,13 +116,13 @@ public class BatteryMonitorService extends Service {
     }
 
     public long getDeepSleepMs() {
-        long uptime = SystemClock.uptimeMillis();
-        long elapsed = SystemClock.elapsedRealtime();
-        return elapsed - uptime;
+        long uptimeSinceBaseline = SystemClock.uptimeMillis() - mBaselineUptimeMs;
+        long elapsedSinceBaseline = SystemClock.elapsedRealtime() - mBaselineElapsedMs;
+        return elapsedSinceBaseline - uptimeSinceBaseline;
     }
 
     public long getAwakeMs() {
-        return SystemClock.uptimeMillis();
+        return SystemClock.uptimeMillis() - mBaselineUptimeMs;
     }
 
     public long getElapsedSinceStartMs() {
@@ -134,12 +138,16 @@ public class BatteryMonitorService extends Service {
         long now = SystemClock.elapsedRealtime();
         mScreenStateChangedAtMs = now;
         mServiceStartElapsedMs = now;
+        mBaselineUptimeMs = SystemClock.uptimeMillis();
+        mBaselineElapsedMs = now;
         PreferenceManager.getDefaultSharedPreferences(this)
                 .edit()
                 .remove(PREF_TOTAL_SCREEN_ON)
                 .remove(PREF_TOTAL_SCREEN_OFF)
                 .remove(PREF_SCREEN_ON_DRAIN)
                 .remove(PREF_SCREEN_OFF_DRAIN)
+                .putLong(PREF_BASELINE_UPTIME_MS, mBaselineUptimeMs)
+                .putLong(PREF_BASELINE_ELAPSED_MS, mBaselineElapsedMs)
                 .apply();
     }
 
@@ -161,6 +169,10 @@ public class BatteryMonitorService extends Service {
         mTotalScreenOffMs.set(prefs.getLong(PREF_TOTAL_SCREEN_OFF, 0L));
         mScreenOnDrainPct.set(prefs.getInt(PREF_SCREEN_ON_DRAIN, 0));
         mScreenOffDrainPct.set(prefs.getInt(PREF_SCREEN_OFF_DRAIN, 0));
+        // Defaults to 0 so a device that never reset behaves exactly as
+        // before (deep sleep/awake measured since actual boot).
+        mBaselineUptimeMs = prefs.getLong(PREF_BASELINE_UPTIME_MS, 0L);
+        mBaselineElapsedMs = prefs.getLong(PREF_BASELINE_ELAPSED_MS, 0L);
 
         PowerManager pm = getSystemService(PowerManager.class);
         mScreenWasOn = pm != null && pm.isInteractive();
