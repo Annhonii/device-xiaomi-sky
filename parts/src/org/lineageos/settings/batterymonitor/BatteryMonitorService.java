@@ -89,6 +89,11 @@ public class BatteryMonitorService extends Service {
                 }
                 mScreenWasOn = false;
                 mScreenStateChangedAtMs = now;
+            } else if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
+                // Unplugged: a fresh discharge cycle starts here, so the
+                // screen-on/off drain % should reflect only this cycle
+                // instead of accumulating across every past charge.
+                resetDrainForNewCycle();
             }
         }
     };
@@ -151,6 +156,20 @@ public class BatteryMonitorService extends Service {
                 .apply();
     }
 
+    /**
+     * Clears just the screen-on/off drain % counters and the drain sampling
+     * baseline, called when a new discharge cycle begins (device unplugged).
+     * Unlike resetTracking(), this leaves total screen-on/off time, deep
+     * sleep/awake baseline, and uptime untouched — those keep running since
+     * the last full "Reset All Data".
+     */
+    private synchronized void resetDrainForNewCycle() {
+        mScreenOnDrainPct.set(0);
+        mScreenOffDrainPct.set(0);
+        mLastSampledLevel = -1;
+        persistTotals();
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -180,6 +199,7 @@ public class BatteryMonitorService extends Service {
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
+        filter.addAction(Intent.ACTION_POWER_DISCONNECTED);
         registerReceiver(mScreenReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
     }
 
