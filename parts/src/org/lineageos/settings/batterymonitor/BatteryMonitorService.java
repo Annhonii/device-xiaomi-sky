@@ -157,9 +157,10 @@ public class BatteryMonitorService extends Service {
     }
 
     /**
-     * Clears just the screen-on/off drain % counters and the drain sampling
-     * baseline, called when a new discharge cycle begins (device unplugged).
-     * Unlike resetTracking(), this leaves total screen-on/off time, deep
+     * Clears the screen-on/off drain % counters, the drain sampling
+     * baseline, and DrainTracker's smoothed Active/Idle values — called
+     * when a new discharge cycle begins (device unplugged). Unlike
+     * resetTracking(), this leaves total screen-on/off time, deep
      * sleep/awake baseline, and uptime untouched — those keep running since
      * the last full "Reset All Data".
      */
@@ -168,6 +169,7 @@ public class BatteryMonitorService extends Service {
         mScreenOffDrainPct.set(0);
         mLastSampledLevel = -1;
         persistTotals();
+        DrainTracker.clearDrain(this);
     }
 
     @Override
