@@ -15,13 +15,17 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base_telephony.mk)
 # Inherit common Bliss configurations
 $(call inherit-product, vendor/lineage/config/common_full_phone.mk)
 
-$(call inherit-product, vendor/lineage/config/BoardConfigReservedSize.mk)
-
 # Inherit device configurations
 $(call inherit-product, $(DEVICE_PATH)/device.mk)
 
 # Inherit from the proprietary version
 $(call inherit-product, vendor/xiaomi/sky/sky-vendor.mk)
+
+
+DEVICE_PACKAGE_OVERLAYS += \                                            
+        $(DEVICE_PATH)/overlay-lineage
+
+USE_RESERVED_SIZE := false
 
 ## Device identifier
 PRODUCT_DEVICE := sky
